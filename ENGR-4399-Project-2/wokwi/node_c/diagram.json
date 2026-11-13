@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "author": "ENGR 4399 Project 2",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "tank",
+      "top": -150,
+      "left": -200,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "bA",
+      "top": -100,
+      "left": 300,
+      "attrs": {
+        "color": "red"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "bB",
+      "top": -40,
+      "left": 300,
+      "attrs": {
+        "color": "yellow"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "bL",
+      "top": 20,
+      "left": 300,
+      "attrs": {
+        "color": "blue"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "mute",
+      "top": 80,
+      "left": 300,
+      "attrs": {
+        "color": "green"
+      }
+    },
+    {
+      "type": "wokwi-buzzer",
+      "id": "bz",
+      "top": -120,
+      "left": 200,
+      "attrs": {
+        "volume": "0.1"
+      }
+    },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht",
+      "top": -150,
+      "left": -80,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    [
+      "tank:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "tank:VCC",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "tank:SIG",
+      "esp:D34",
+      "green",
+      []
+    ],
+    [
+      "bA:1.l",
+      "esp:D26",
+      "green",
+      []
+    ],
+    [
+      "bA:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "bB:1.l",
+      "esp:D25",
+      "green",
+      []
+    ],
+    [
+      "bB:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "bL:1.l",
+      "esp:D33",
+      "green",
+      []
+    ],
+    [
+      "bL:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "mute:1.l",
+      "esp:D27",
+      "green",
+      []
+    ],
+    [
+      "mute:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "bz:1",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "bz:2",
+      "esp:D23",
+      "red",
+      []
+    ],
+    [
+      "dht:VCC",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "dht:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "dht:SDA",
+      "esp:D4",
+      "green",
+      []
+    ]
+  ],
+  "dependencies": {}
+}

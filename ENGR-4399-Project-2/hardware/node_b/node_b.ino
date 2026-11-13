@@ -1,0 +1,326 @@
+// Node B: Distribution zone (greenhouse tank)
+// Sensors: tank level (GPIO 34), leak / water presence (GPIO 35)
+// Output:  servo valve (GPIO 18)
+// Mesh:    ESP-NOW flood with TTL, JSON heartbeat every 2 s
+// Libraries: ArduinoJson (v7), ESP32Servo
+//
+// Fail-safe: if Node A is silent for 6 s, or a leak is seen, this node closes
+// its own valve and goes SAFE. It does not wait for the dashboard.
+// Leaving SAFE: automatic once the cause has been gone for HOLD_MS.
+// A closed valve is the safe direction, so no operator ACK is needed here.
+
+#include <WiFi.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
+#include <ArduinoJson.h>
+#include <ESP32Servo.h>
+
+const char MY_ID = 'B';
+const uint8_t WIFI_CHANNEL = 1;        // placeholder, must match every node
+const uint8_t TTL_START = 2;           // extra hops after the first send
+const uint32_t HEARTBEAT_MS = 2000;
+const uint32_t LATE_MS = 4000;         // 2 missed heartbeats: DEGRADED
+const uint32_t LOST_MS = 6000;         // 3 missed heartbeats: LOST
+const uint32_t HOLD_MS = 5000;         // cause must stay gone this long to leave SAFE
+const uint32_t STARTUP_GRACE_MS = 10000;
+const uint32_t SENSE_MS = 250;
+const uint32_t PRINT_MS = 2000;
+
+// Pins (analog on ADC1 only, GPIO 32 to 39)
+const int PIN_TANK = 34;
+const int PIN_LEAK = 35;
+const int PIN_VALVE = 18;
+
+// Calibration: read the raw values from the serial monitor and adjust.
+// Power the analog sensors from 3.3 V so the signal stays within range.
+const int TANK_EMPTY_RAW = 0;
+const int TANK_FULL_RAW = 2000;
+const int LEAK_RAW = 800;              // above this means water is present
+const int FULL_CLOSE = 90;             // close valve at this tank level (overflow protection)
+const int FULL_REOPEN = 80;            // reopen at this level (hysteresis)
+const int VALVE_OPEN_DEG = 90;
+const int VALVE_CLOSED_DEG = 0;
+
+const char* ZONES[3] = {"Source", "Distribution", "Gateway"};
+const uint8_t BCAST[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+enum State { NORMAL, DEGRADED, SAFE };
+const char* STATE_NAMES[] = {"NORMAL", "DEGRADED", "SAFE"};
+
+struct Peer {
+  bool everHeard = false;
+  bool lost = false;
+  uint32_t lastHeard = 0;
+  uint32_t lastSeq = 0;
+  uint32_t lastUp = 0;
+  int level = -1;
+  char via = '?';
+};
+Peer peers[3];  // 0 = A, 1 = B (self), 2 = C
+
+struct RxMsg {
+  uint8_t data[200];
+  int len;
+};
+QueueHandle_t rxQueue;
+
+Servo valve;
+State state = NORMAL;
+char why[10] = "";
+bool leak = false;
+bool fullLock = false;
+bool valveOpen = false;
+int leakHits = 0;
+int tankPct = 0;
+int tankRaw = 0;
+int leakRaw = 0;
+uint32_t mySeq = 0;
+uint32_t lastBeat = 0, lastPrint = 0, lastSense = 0, lastUnsafe = 0;
+
+int idx(char c) { return c - 'A'; }
+
+void logEvent(const char* text) {
+  uint32_t s = millis() / 1000;
+  Serial.printf("[%02u:%02u] EVENT: %s\n", (unsigned)(s / 60), (unsigned)(s % 60), text);
+}
+
+// ---------- Sensors ----------
+int readRaw(int pin) {
+  long sum = 0;
+  for (int i = 0; i < 8; i++) sum += analogRead(pin);
+  return (int)(sum / 8);
+}
+
+int rawToPct(int raw, int lo, int hi) {
+  return constrain(map(raw, lo, hi, 0, 100), 0, 100);
+}
+
+void readSensors() {
+  tankRaw = readRaw(PIN_TANK);
+  tankPct = rawToPct(tankRaw, TANK_EMPTY_RAW, TANK_FULL_RAW);
+
+  leakRaw = readRaw(PIN_LEAK);
+  if (leakRaw > LEAK_RAW) {
+    if (leakHits < 5) leakHits++;
+  } else {
+    leakHits = 0;
+  }
+  bool nowLeak = leakHits >= 3;  // 3 reads in a row, about 0.75 s
+  if (nowLeak != leak) {
+    leak = nowLeak;
+    logEvent(leak ? "Leak detected, zone Distribution flagged" : "Leak cleared");
+  }
+}
+
+// ---------- Mesh ----------
+void sendDoc(JsonDocument& doc) {
+  char buf[200];
+  size_t n = serializeJson(doc, buf, sizeof(buf));
+  esp_now_send(BCAST, (uint8_t*)buf, n);
+}
+
+void sendHeartbeat() {
+  char idStr[2] = {MY_ID, 0};
+  JsonDocument doc;
+  doc["id"] = idStr;
+  doc["zone"] = ZONES[idx(MY_ID)];
+  doc["seq"] = ++mySeq;
+  doc["up"] = millis() / 1000;
+  doc["ttl"] = TTL_START;
+  doc["via"] = idStr;
+  doc["lvl"] = tankPct;
+  doc["leak"] = leak ? 1 : 0;
+  doc["valve"] = valveOpen ? "OPEN" : "CLOSED";
+  doc["st"] = STATE_NAMES[state];
+  doc["why"] = why;
+  sendDoc(doc);
+}
+
+// Runs in the WiFi task: copy the frame and leave.
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+#else
+void onRecv(const uint8_t* mac, const uint8_t* data, int len) {
+#endif
+  if (len <= 0 || len > 200) return;
+  RxMsg m;
+  memcpy(m.data, data, len);
+  m.len = len;
+  xQueueSend(rxQueue, &m, 0);
+}
+
+void handleMsg(const RxMsg& m) {
+  JsonDocument doc;
+  if (deserializeJson(doc, (const char*)m.data, m.len)) return;  // bad JSON, drop
+
+  const char* idc = doc["id"] | "?";
+  char origin = idc[0];
+  if (origin < 'A' || origin > 'C' || origin == MY_ID) return;
+
+  const char* viac = doc["via"] | "?";
+  char via = viac[0];
+  uint32_t seq = doc["seq"] | 0;
+  uint32_t up = doc["up"] | 0;
+  Peer& p = peers[idx(origin)];
+
+  bool rebooted = p.everHeard && up < p.lastUp;
+  if (p.everHeard && !rebooted && seq <= p.lastSeq) return;  // duplicate or old
+
+  if (p.lost) {
+    char msg[48];
+    snprintf(msg, sizeof(msg), "Node %c back, zone %s", origin, ZONES[idx(origin)]);
+    logEvent(msg);
+  }
+  p.everHeard = true;
+  p.lost = false;
+  p.lastHeard = millis();
+  p.lastSeq = seq;
+  p.lastUp = up;
+  p.level = doc["lvl"] | -1;
+  p.via = via;
+
+  // Forward so nodes out of direct range still hear it.
+  int ttl = doc["ttl"] | 0;
+  if (ttl > 0) {
+    char meStr[2] = {MY_ID, 0};
+    doc["ttl"] = ttl - 1;
+    doc["via"] = meStr;
+    sendDoc(doc);
+  }
+}
+
+bool peerAlive(int i) {
+  return peers[i].everHeard && (millis() - peers[i].lastHeard) < LOST_MS;
+}
+
+bool peerLate(int i) {
+  return peerAlive(i) && (millis() - peers[i].lastHeard) > LATE_MS;
+}
+
+void checkTimeouts() {
+  for (int i = 0; i < 3; i++) {
+    if (i == idx(MY_ID)) continue;
+    Peer& p = peers[i];
+    if (p.everHeard && !p.lost && millis() - p.lastHeard > LOST_MS) {
+      p.lost = true;
+      char msg[56];
+      snprintf(msg, sizeof(msg), "Node %c LOST, zone %s flagged", 'A' + i, ZONES[i]);
+      logEvent(msg);
+    }
+  }
+}
+
+// ---------- State machine ----------
+void setState(State s) {
+  if (s == state) return;
+  char msg[56];
+  if (s == SAFE) snprintf(msg, sizeof(msg), "State %s -> SAFE (%s)", STATE_NAMES[state], why);
+  else snprintf(msg, sizeof(msg), "State %s -> %s", STATE_NAMES[state], STATE_NAMES[s]);
+  state = s;
+  logEvent(msg);
+}
+
+void updateState() {
+  uint32_t now = millis();
+  bool graceOver = now > STARTUP_GRACE_MS;
+  bool aMissing = !peerAlive(0) && (peers[0].everHeard || graceOver);
+  bool cMissing = !peerAlive(2) && (peers[2].everHeard || graceOver);
+  bool unsafe = aMissing || leak;
+
+  if (unsafe) {
+    lastUnsafe = now;
+    strcpy(why, leak ? "LEAK" : "A_LOST");
+    setState(SAFE);
+    return;
+  }
+  if (state == SAFE) {
+    if (now - lastUnsafe < HOLD_MS) return;  // still holding
+    why[0] = 0;
+  }
+  bool late = peerLate(0) || peerLate(2);
+  setState((cMissing || late) ? DEGRADED : NORMAL);
+}
+
+// ---------- Valve ----------
+void updateValve() {
+  if (tankPct >= FULL_CLOSE) fullLock = true;
+  else if (tankPct <= FULL_REOPEN) fullLock = false;
+
+  // Closed by default: only open after A has been heard and nothing is wrong.
+  bool want = (state != SAFE) && peers[0].everHeard && !fullLock;
+  if (want != valveOpen) {
+    valveOpen = want;
+    valve.write(valveOpen ? VALVE_OPEN_DEG : VALVE_CLOSED_DEG);
+    if (valveOpen) logEvent("Valve OPEN");
+    else logEvent(fullLock ? "Valve CLOSED, tank full" : "Valve CLOSED");
+  }
+}
+
+// ---------- Status line ----------
+const char* peerText(int i) {
+  if (!peers[i].everHeard) return "WAIT ";
+  return peerAlive(i) ? "ALIVE" : "LOST ";
+}
+
+float peerAge(int i) {
+  return peers[i].everHeard ? (millis() - peers[i].lastHeard) / 1000.0 : 0.0;
+}
+
+void printStatus() {
+  uint32_t s = millis() / 1000;
+  Serial.printf("[%02u:%02u] B %-8s | tank %3d%% (raw %d) | leak %s (raw %d) | valve %s | A %s %.1fs | C %s %.1fs\n",
+                (unsigned)(s / 60), (unsigned)(s % 60), STATE_NAMES[state], tankPct, tankRaw,
+                leak ? "YES" : "NO", leakRaw, valveOpen ? "OPEN" : "CLOSED",
+                peerText(0), peerAge(0), peerText(2), peerAge(2));
+}
+
+// ---------- Arduino ----------
+void setup() {
+  Serial.begin(115200);
+  analogReadResolution(12);
+
+  valve.attach(PIN_VALVE);
+  valve.write(VALVE_CLOSED_DEG);  // closed until A is heard
+
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    while (true) delay(1000);
+  }
+  rxQueue = xQueueCreate(8, sizeof(RxMsg));
+  esp_now_register_recv_cb(onRecv);
+
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, BCAST, 6);
+  peer.channel = WIFI_CHANNEL;
+  peer.encrypt = false;  // add a PMK/LMK later, keep them as placeholders in shared code
+  esp_now_add_peer(&peer);
+
+  Serial.printf("Node %c up, zone %s\n", MY_ID, ZONES[idx(MY_ID)]);
+}
+
+void loop() {
+  RxMsg m;
+  while (xQueueReceive(rxQueue, &m, 0) == pdTRUE) handleMsg(m);
+
+  uint32_t now = millis();
+  if (now - lastSense >= SENSE_MS) {
+    lastSense = now;
+    readSensors();
+  }
+  checkTimeouts();
+  updateState();
+  updateValve();
+
+  if (now - lastBeat >= HEARTBEAT_MS) {
+    lastBeat = now;
+    sendHeartbeat();
+  }
+  if (now - lastPrint >= PRINT_MS) {
+    lastPrint = now;
+    printStatus();
+  }
+}

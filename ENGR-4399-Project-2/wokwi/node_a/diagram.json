@@ -1,0 +1,188 @@
+{
+  "version": 1,
+  "author": "ENGR 4399 Project 2",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "water",
+      "top": -150,
+      "left": -200,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "tank",
+      "top": -150,
+      "left": -80,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "bB",
+      "top": -100,
+      "left": 300,
+      "attrs": {
+        "color": "red"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "bC",
+      "top": -40,
+      "left": 300,
+      "attrs": {
+        "color": "yellow"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "bL",
+      "top": 20,
+      "left": 300,
+      "attrs": {
+        "color": "blue"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "ack",
+      "top": 80,
+      "left": 300,
+      "attrs": {
+        "color": "green"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "pump",
+      "top": -110,
+      "left": 200,
+      "attrs": {
+        "color": "green",
+        "label": "PUMP"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r1",
+      "top": -50,
+      "left": 200,
+      "attrs": {
+        "value": "220"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "water:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "water:VCC",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "water:SIG",
+      "esp:D35",
+      "green",
+      []
+    ],
+    [
+      "tank:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "tank:VCC",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "tank:SIG",
+      "esp:D34",
+      "green",
+      []
+    ],
+    [
+      "bB:1.l",
+      "esp:D26",
+      "green",
+      []
+    ],
+    [
+      "bB:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "bC:1.l",
+      "esp:D25",
+      "green",
+      []
+    ],
+    [
+      "bC:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "bL:1.l",
+      "esp:D33",
+      "green",
+      []
+    ],
+    [
+      "bL:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "ack:1.l",
+      "esp:D27",
+      "green",
+      []
+    ],
+    [
+      "ack:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "esp:D13",
+      "r1:1",
+      "green",
+      []
+    ],
+    [
+      "r1:2",
+      "pump:A",
+      "green",
+      []
+    ],
+    [
+      "pump:C",
+      "esp:GND.1",
+      "black",
+      []
+    ]
+  ],
+  "dependencies": {}
+}
