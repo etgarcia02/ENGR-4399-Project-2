@@ -5,8 +5,8 @@ Three ESP32 nodes talk over ESP-NOW (no Wi-Fi network, API, or cloud). If a node
 the others stop the pump, close the valve, sound the buzzer, and name the affected zone on the serial dashboard.
 
 Course: ENGR 4399 ST, Cyber-Physical and IoT Systems, Fall 2026
-Group: Ethan Garcia; [partner full name]
-Wokwi links: Node A [link] | Node B [link] | Node C [link]
+Group: Ethan Garcia; Esai Uribe
+Wokwi links: Node A https://wokwi.com/projects/480534892117182465 | Node B https://wokwi.com/projects/480534953746211841 | Node C https://wokwi.com/projects/480535007096733697
 
 ## Nodes
 
