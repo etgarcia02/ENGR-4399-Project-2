@@ -1,4 +1,4 @@
-# ENGR 4399 Project 2: Greenhouse Water Guardian
+# ENGR 4399 Project 2: Smart Water Distribution and Pump Control for Greenhouse
 
 Smart Water Distribution and Pump Control, a distributed and resilient cyber-physical system.
 Three ESP32 nodes talk over ESP-NOW (no Wi-Fi network, API, or cloud). If a node goes quiet for 6 seconds,
